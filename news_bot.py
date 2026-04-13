@@ -3,7 +3,7 @@ import requests
 import streamlit as st
 import logging
 import feedparser
-import time
+import random
 from datetime import datetime, timedelta
 from aiogram import Bot
 
@@ -16,32 +16,30 @@ CHANNEL_ID = "@info_sphere_tg"
 
 bot = Bot(token=TOKEN)
 
-# Источники (расширил список для разнообразия тем)
 RSS_SOURCES = [
-    "https://news.google.com/rss/search?q=Ukraine+tech+war+world&hl=uk&gl=UA&ceid=UA:uk",
+    "https://news.google.com/rss/search?q=Ukraine+war+politics+economy&hl=uk&gl=UA&ceid=UA:uk",
     "https://www.unian.net/rss",
     "https://censor.net/includes/news_ru.xml",
-    "https://nv.ua/rss/all.xml",
-    "https://uapress.info/rss/all.xml"
+    "https://nv.ua/rss/all.xml"
 ]
 
+# Исключаем темы, которые не подходят для серьезного канала
+EXCLUDE_WORDS = ['гороскоп', 'диета', 'георгин', 'кожа', 'цветы', 'шоу-биз', 'бритни спирс']
+
 posted_links = set()
-last_topics = [] # Храним последние темы, чтобы не повторяться
+last_topics = []
 
 async def rewrite_news_ai(title, desc):
-    """ИИ с четкой УКРАИНСКОЙ позицией и провокацией в конце"""
-    
+    """ИИ с проукраинской позицией"""
     prompt = (
-        f"Напиши вирусный пост для украинского Телеграм-канала. "
+        f"Напиши вирусный пост для украинского канала.\n"
         f"НОВОСТЬ: {title}. {desc}\n\n"
         f"ИНСТРУКЦИЯ:\n"
-        f"1. Позиция: СТРОГО ПРОУКРАИНСКАЯ. Акцент на защите наших интересов, силе Украины и важности событий для нашей победы и будущего.\n"
-        f"2. Стиль: Живой, дерзкий, патриотичный, но не 'дешевый кликбейт'. Текст от 350 символов.\n"
-        f"3. Обязательно используй абзацы и эмодзи.\n"
-        f"4. ФИНАЛ: Добавь жесткий провокационный вопрос к читателям, который заставит их спорить и обсуждать тему в комментариях.\n"
-        f"Текст пиши на русском языке (или украинском, если канал на нем)."
+        f"1. Позиция: Четко проукраинская. Акцент на важных событиях, победах и вызовах для страны.\n"
+        f"2. Текст: Длинный (от 350 симв.), дерзкий, аналитический, с эмодзи.\n"
+        f"3. ФИНАЛ: Жесткая провокация для дискуссии в комментариях.\n"
+        f"Пиши на русском языке (так как источники смешанные)."
     )
-    
     try:
         response = requests.post(
             url="https://openrouter.ai/api/v1/chat/completions",
@@ -59,13 +57,11 @@ async def post_engine():
         logging.info("Начинаю круг проверки источников...")
         time_limit = datetime.now() - timedelta(hours=8)
         
-        # Берем все новости из всех лент в один список
         all_entries = []
         for url in RSS_SOURCES:
             feed = feedparser.parse(url)
             all_entries.extend(feed.entries)
         
-        # Перемешиваем, чтобы не шли новости только из одного источника
         random.shuffle(all_entries)
 
         for entry in all_entries:
@@ -73,40 +69,38 @@ async def post_engine():
                 pub_date = datetime(*entry.published_parsed[:6])
             except: continue
             
-            # Проверяем: свежая ли, не постили ли уже и нет ли 'Венгрии' слишком часто
-            is_duplicate_topic = any(word in entry.title.lower() for word in last_topics[-3:])
+            # Фильтруем мусор и дубли тем
+            title_lower = entry.title.lower()
+            is_trash = any(word in title_lower for word in EXCLUDE_WORDS)
+            is_duplicate = any(word in title_lower for word in last_topics[-3:])
             
-            if pub_date > time_limit and entry.link not in posted_links and not is_duplicate_topic:
+            if pub_date > time_limit and entry.link not in posted_links and not is_trash and not is_duplicate:
                 
                 logging.info(f"Обработка: {entry.title}")
                 description = getattr(entry, 'description', '')
                 viral_text = await rewrite_news_ai(entry.title, description)
                 
-                if viral_text and len(viral_text) > 250:
+                if viral_text and len(viral_text) > 200:
                     try:
+                        # ТУТ ИСПРАВЛЕНА ОШИБКА name 'final_text' is not defined
                         final_post = f"{viral_text}\n\n<a href='{entry.link}'>🔗 Источник</a>"
-                        await bot.send_message(CHANNEL_ID, final_text, parse_mode="HTML")
+                        
+                        await bot.send_message(CHANNEL_ID, final_post, parse_mode="HTML")
                         
                         posted_links.add(entry.link)
-                        # Запоминаем ключевое слово из заголовка, чтобы не частить с темой
                         last_topics.append(entry.title.split()[0].lower()) 
                         
-                        logging.info("--- ПОСТ ОПУБЛИКОВАН. Ухожу в сон на 15 минут ---")
-                        # СТРОГАЯ ПАУЗА 15 МИНУТ после поста
+                        logging.info("--- ПОСТ ОПУБЛИКОВАН. Сон 15 мин ---")
                         await asyncio.sleep(900) 
-                        break # Выходим из поиска, цикл while начнется заново через 15 мин
+                        break 
                     except Exception as e:
                         logging.error(f"Ошибка ТГ: {e}")
         
-        # Если ничего нового не нашли, ждем 2 минуты и проверяем снова
-        await asyncio.sleep(120)
+        await asyncio.sleep(180)
 
 if __name__ == "__main__":
-    st.set_page_config(page_title="Info Sphere AI")
-    st.title("🗞 Info Sphere: Редакция v2.0")
-    st.write("Настройка: Проукраинская позиция, интервал 15 минут.")
+    st.title("🗞 Info Sphere: Редакция v2.1 (Fixed)")
     
-    if "aggregator_v2" not in st.session_state:
-        st.session_state.aggregator_v2 = True
-        import random # Добавил тут, чтобы перемешивание работало
+    if "aggregator_run_v21" not in st.session_state:
+        st.session_state.aggregator_run_v21 = True
         asyncio.run(post_engine())
